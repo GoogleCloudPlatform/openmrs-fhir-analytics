@@ -48,6 +48,9 @@ import org.hl7.fhir.r4.model.Resource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Utility class to help get parquet writers for the respective fhir resources.
+ */
 public class ParquetUtil {
 	
 	private static final Logger log = LoggerFactory.getLogger(ParquetUtil.class);
@@ -204,7 +207,10 @@ public class ParquetUtil {
 			flush(resourceType);
 		}
 	}
-	
+
+	/**
+	 * This closes the writers for the different resource type.
+	 */
 	synchronized public void closeAllWriters() throws IOException {
 		for (Map.Entry<String, ParquetWriter<GenericRecord>> entry : writerMap.entrySet()) {
 			entry.getValue().close();

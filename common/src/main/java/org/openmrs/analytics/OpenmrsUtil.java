@@ -23,6 +23,9 @@ import org.hl7.fhir.r4.model.Resource;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Utility class for getting fhir resources from Openmrs.
+ */
 public class OpenmrsUtil {
 	
 	private static final Logger log = LoggerFactory.getLogger(OpenmrsUtil.class);
@@ -42,7 +45,9 @@ public class OpenmrsUtil {
 		this.sourcePw = sourcePw;
 		this.fhirContext = fhirContext;
 	}
-	
+	/**
+	 * Fetches the fhir resource from openmrs courtesy of the openmrs FHIR2 module.
+	 */
 	public Resource fetchFhirResource(String resourceUrl) {
 		try {
 			// Create client
