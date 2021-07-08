@@ -1,7 +1,20 @@
 #!/usr/bin/env bash
+# Copyright 2020 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 #######################################
-# Function that prints messages
+# Function that prints messages.
 # Arguments:
 #   anything that needs printing
 #######################################
@@ -10,56 +23,13 @@ function print_message() {
   echo "${print_prefix} $*"
 }
 
-
 #######################################
-# Function that sets up testing env
+# Call common.sh to setup 
+# the testing env
+#  
 #######################################
-function setup() {
-  HOME_PATH=$(pwd)
-
-  print_message "BUILDING THE ANALYTICS PROJECT"
-  mvn compile
-
-  print_message "STARTING SERVERs"
-  docker-compose -f docker/openmrs-compose.yaml up -d --remove-orphans
-  openmrs_start_wait_time=0
-  contenttype=$(curl -o /dev/null --head -w "%{content_type}\n" -X GET -u admin:Admin123 --connect-timeout 5 \
-    --max-time 20 http://localhost:8099/openmrs/ws/fhir2/R4/Patient 2>/dev/null | cut -d ";" -f 1)
-  until [[ ${contenttype} == "application/fhir+json" ]]; do
-    sleep 60s
-    print_message "WAITING FOR OPENMRS SERVER TO START"
-    contenttype=$(curl -o /dev/null --head -w "%{content_type}\n" -X GET -u admin:Admin123 --connect-timeout 5 \
-      --max-time 20 http://localhost:8099/openmrs/ws/fhir2/R4/Patient 2>/dev/null | cut -d ";" -f 1)
-    ((openmrs_start_wait_time += 1))
-    if [[ ${openmrs_start_wait_time} == 20 ]]; then
-      print_message "TERMINATING TEST AS OPENMRS TOOK TOO LONG TO START"
-      exit 1
-    fi
-  done
-  print_message "OPENMRS SERVER STARTED SUCCESSFULLY"
-
-  docker-compose -f  docker/sink-compose.yml up -d
-  fhir_server_start_wait_time=0
-  fhir_server_status_code=$(curl -o /dev/null --head -w "%{http_code}" -L -X GET -u hapi:hapi --connect-timeout 5 \
-    --max-time 20 http://localhost:8098/fhir/Observation 2>/dev/null)
-  until [[ ${fhir_server_status_code} -eq 200 ]]; do
-    sleep 1s
-    print_message "WAITING FOR FHIR SERVER TO START"
-    fhir_server_status_code=$(curl -o /dev/null --head -w "%{http_code}" -L -X GET -u hapi:hapi --connect-timeout 5 \
-      --max-time 20 http://localhost:8098/fhir/Observation 2>/dev/null)
-    ((fhir_server_start_wait_time += 1))
-    if [[ fhir_server_start_wait_time == 10 ]]; then
-      print_message "TERMINATING AS FHIR SERVER TOOK TOO LONG TO START"
-      exit 1
-    fi
-  done
-  print_message "FHIR SERVER STARTED SUCCESSFULLY"
-
-  TEST_DIR_FHIR=$(mktemp -d -t analytics_tests__XXXXXX_FHIRSEARCH)
-  TEST_DIR_JDBC=$(mktemp -d -t analytics_tests__XXXXXX_JDBC)
-  JDBC_SETTINGS="--jdbcModeEnabled=true"
-}
-
+source ./e2e-tests/common-mode-tests.sh
+setup
 
 #######################################
 # Function that tests sinking to parquet files
@@ -92,36 +62,7 @@ function test_parquet_sink() {
     exit 1
   fi
   cd "${test_dir}"
-  mkdir omrs
-  print_message "Finding number of patients, encounters and obs in openmrs server"
-  curl -L -X GET -u admin:Admin123 --connect-timeout 5 --max-time 20 \
-    http://localhost:8099/openmrs/ws/fhir2/R4/Patient/ 2>/dev/null >>./omrs/patients.json
-  total_test_patients=$(jq '.total' ./omrs/patients.json)
-  print_message "Total openmrs test patients ---> ${total_test_patients}"
-  curl -L -X GET -u admin:Admin123 --connect-timeout 5 --max-time 20 \
-    http://localhost:8099/openmrs/ws/fhir2/R4/Encounter/ 2>/dev/null >>./omrs/encounters.json
-  total_test_encounters=$(jq '.total' ./omrs/encounters.json)
-  print_message "Total openmrs test encounters ---> ${total_test_encounters}"
-  curl -L -X GET -u admin:Admin123 --connect-timeout 5 --max-time 20 \
-    http://localhost:8099/openmrs/ws/fhir2/R4/Observation/ 2>/dev/null >>./omrs/obs.json
-  total_test_obs=$(jq '.total' ./omrs/obs.json)
-  print_message "Total openmrs test obs ---> ${total_test_obs}"
-  print_message "Counting number of patients, encounters and obs sinked to parquet files"
-  total_patients_streamed=$(java -jar ./parquet-tools-1.11.1.jar rowcount ./Patient/ | awk '{print $3}')
-  print_message "Total patients synced to parquet ---> ${total_patients_streamed}"
-  total_encounters_streamed=$(java -jar ./parquet-tools-1.11.1.jar rowcount ./Encounter/ | awk '{print $3}')
-  print_message "Total encounters synced to parquet ---> ${total_encounters_streamed}"
-  total_obs_streamed=$(java -jar ./parquet-tools-1.11.1.jar rowcount ./Observation/ | awk '{print $3}')
-  print_message "Total obs synced to parquet ---> ${total_obs_streamed}"
-
-  if [[ ${total_patients_streamed} == ${total_test_patients} && ${total_encounters_streamed} == ${total_test_encounters} && ${total_obs_streamed} == ${total_test_obs} ]] \
-    ; then
-    print_message "BATCH MODE WITH PARQUET SINK EXECUTED SUCCESSFULLY USING ${mode} MODE"
-    cd "${HOME_PATH}"
-  else
-    print_message "BATCH MODE WITH PARQUET SINK TEST FAILED USING ${mode} MODE"
-    exit 1
-  fi
+  validate_parquet_counts
 }
 
 #######################################
@@ -137,30 +78,10 @@ function test_fhir_sink() {
   --fhirSinkPath=http://localhost:8098/fhir  --sinkUserName=hapi --sinkPassword=hapi $1")
   local test_dir=$2
   local mode=$3
-
   print_message " ${command[*]}"
   "${command[@]}"
-
   cd "${test_dir}"
-  mkdir omrs_fhir_sink
-  print_message "Finding number of patients, encounters and obs in openmrs server"
-  curl -L -X GET -u admin:Admin123 --connect-timeout 5 --max-time 20 \
-    http://localhost:8099/openmrs/ws/fhir2/R4/Patient/ 2>/dev/null >>./omrs_fhir_sink/patients.json
-  total_test_patients=$(jq '.total' ./omrs_fhir_sink/patients.json)
-
-  mkdir fhir
-  print_message "Counting number of patients, encounters and obs sinked to fhir files"
-  curl -L -X GET -u hapi:hapi --connect-timeout 5 --max-time 20 \
-    http://localhost:8098/fhir/Patient/?_summary=count 2>/dev/null >>./fhir/patients.json
-  total_patients_sinked_fhir=$(jq '.total' ./fhir/patients.json)
-  print_message "Total patients sinked to fhir ---> ${total_patients_sinked_fhir}"
-  if [[ ${total_patients_sinked_fhir} == ${total_test_patients} ]]; then
-    print_message "BATCH MODE WITH FHIR SERVER SINK EXECUTED SUCCESSFULLY USING ${mode} MODE"
-    cd "${HOME_PATH}"
-  else
-    print_message "BATCH MODE WITH FHIR SERVER SINK TEST FAILED USING ${mode} MODE"
-    exit 1
-  fi
+  validate_fhir_counts 
 }
 
 setup
@@ -172,5 +93,4 @@ test_parquet_sink "--outputParquetPath=${TEST_DIR_JDBC}/ ${JDBC_SETTINGS}" "${TE
 print_message "---- STARTING FHIR SINK TEST ----"
 test_fhir_sink "${JDBC_SETTINGS}" "${TEST_DIR_JDBC}" "JDBC"
 test_fhir_sink "" "${TEST_DIR_FHIR}" "FHIR_SEARCH"
-
 print_message "END!!"
